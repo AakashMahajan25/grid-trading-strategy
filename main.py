@@ -1,5 +1,4 @@
 from backtesting import Backtest, Strategy
-from backtesting.lib import crossover
 import talib
 from backtesting.test import GOOG
 
@@ -24,7 +23,7 @@ class GridTradingStrategy(Strategy):
         self.traded_prices = []  
     
     def next(self):
-        if crossover(self.ema_short, self.ema_long):
+        if self.ema_short > self.ema_long:
             atr = self.atr[-1]
             ltp = self.data.Close[-1]
         
@@ -57,7 +56,7 @@ class GridTradingStrategy(Strategy):
                     self.traded_prices = []  
                     
                     
-        elif crossover(self.ema_long, self.ema_short):
+        elif self.ema_short < self.ema_long:
             atr = self.atr[-1]
             ltp = self.data.Close[-1]
         
