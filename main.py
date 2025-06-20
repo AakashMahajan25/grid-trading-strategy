@@ -21,12 +21,25 @@ class GridTradingStrategy(Strategy):
         self.tp = -1
         self.level = 1
         self.traded_prices = []  
-    
-    def next(self):
-        if self.ema_short > self.ema_long:
-            atr = self.atr[-1]
-            ltp = self.data.Close[-1]
+
         
+    def next(self):
+        atr = self.atr[-1]
+        ltp = self.data.Close[-1]
+
+        if self.position:
+            if self.position.is_long:
+                new_sl = ltp - (self.STOP_LOSS_FACTOR * self.traded_atr)
+                if self.sl < new_sl:
+                    self.sl = new_sl
+                    self.position.sl = self.sl
+            elif self.position.is_short:
+                new_sl = ltp + (self.STOP_LOSS_FACTOR * self.traded_atr)
+                if self.sl > new_sl:
+                    self.sl = new_sl
+                    self.position.sl = self.sl
+        
+        if self.ema_short > self.ema_long:
             if not self.position:
                 self.active = True
                 self.traded_ltp = ltp
@@ -57,9 +70,6 @@ class GridTradingStrategy(Strategy):
                     
                     
         elif self.ema_short < self.ema_long:
-            atr = self.atr[-1]
-            ltp = self.data.Close[-1]
-        
             if not self.position:
                 self.active = True
                 self.traded_ltp = ltp
