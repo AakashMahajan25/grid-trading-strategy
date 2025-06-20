@@ -5,10 +5,10 @@ from backtesting.test import GOOG
 class GridTradingStrategy(Strategy):
     EMA_SHORT_PERIOD = 9
     EMA_LONG_PERIOD = 21
-    ATR_PERIOD = 14
-    NUMBER_OF_LEVELS = 5
+    ATR_PERIOD = 5
+    NUMBER_OF_LEVELS = 6
     STOP_LOSS_FACTOR = 1.2
-    TAKE_PROFIT_FACTOR = 0.25
+    TAKE_PROFIT_FACTOR = 0.5
     
     def init(self):
         self.ema_short = self.I(talib.EMA, self.data.Close, self.EMA_SHORT_PERIOD)
@@ -40,6 +40,12 @@ class GridTradingStrategy(Strategy):
                     self.position.sl = self.sl
         
         if self.ema_short > self.ema_long:
+            if self.position and self.position.is_short:
+                self.position.close()
+                self.level = 1
+                self.active = False
+                self.traded_prices = []
+                
             if not self.position:
                 self.active = True
                 self.traded_ltp = ltp
@@ -70,6 +76,12 @@ class GridTradingStrategy(Strategy):
                     
                     
         elif self.ema_short < self.ema_long:
+            if self.position and self.position.is_long:
+                self.position.close()
+                self.level = 1
+                self.active = False
+                self.traded_prices = []
+
             if not self.position:
                 self.active = True
                 self.traded_ltp = ltp
