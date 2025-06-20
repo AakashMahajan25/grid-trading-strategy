@@ -1,19 +1,21 @@
 from backtesting import Backtest, Strategy
 import talib
 from backtesting.test import GOOG
+import pandas as pd
 
 class GridTradingStrategy(Strategy):
-    EMA_SHORT_PERIOD = 9
-    EMA_LONG_PERIOD = 21
-    ATR_PERIOD = 5
-    NUMBER_OF_LEVELS = 6
-    STOP_LOSS_FACTOR = 1.2
-    TAKE_PROFIT_FACTOR = 0.5
+    ema_short_period = 9
+    ema_long_period = 21
+    atr_period = 3
+    number_of_levels = 5
+    grid_spacing = 0.2
+    stop_loss_factor = 2.5
+    take_profit_factor = 0.5
     
     def init(self):
-        self.ema_short = self.I(talib.EMA, self.data.Close, self.EMA_SHORT_PERIOD)
-        self.ema_long = self.I(talib.EMA, self.data.Close, self.EMA_LONG_PERIOD)
-        self.atr = self.I(talib.ATR, self.data.High, self.data.Low, self.data.Close, self.ATR_PERIOD)
+        self.ema_short = self.I(talib.EMA, self.data.Close, self.ema_short_period)
+        self.ema_long = self.I(talib.EMA, self.data.Close, self.ema_long_period)
+        self.atr = self.I(talib.ATR, self.data.High, self.data.Low, self.data.Close, self.atr_period)
         self.active = False
         self.traded_ltp = -1
         self.traded_atr = -1
@@ -29,12 +31,12 @@ class GridTradingStrategy(Strategy):
 
         if self.position:
             if self.position.is_long:
-                new_sl = ltp - (self.STOP_LOSS_FACTOR * self.traded_atr)
+                new_sl = ltp - (self.stop_loss_factor * self.traded_atr)
                 if self.sl < new_sl:
                     self.sl = new_sl
                     self.position.sl = self.sl
             elif self.position.is_short:
-                new_sl = ltp + (self.STOP_LOSS_FACTOR * self.traded_atr)
+                new_sl = ltp + (self.stop_loss_factor * self.traded_atr)
                 if self.sl > new_sl:
                     self.sl = new_sl
                     self.position.sl = self.sl
@@ -50,25 +52,24 @@ class GridTradingStrategy(Strategy):
                 self.active = True
                 self.traded_ltp = ltp
                 self.traded_atr = atr
-                self.sl = self.traded_ltp - (self.STOP_LOSS_FACTOR * self.traded_atr)
-                self.tp = self.traded_ltp + (self.TAKE_PROFIT_FACTOR * self.traded_atr)
+                self.sl = self.traded_ltp - (self.stop_loss_factor * self.traded_atr)
             
-                self.buy(size=1, sl=self.sl, tp=self.tp)
+                self.buy(size=1, sl=self.sl)
                 self.traded_prices.append(ltp)  
             
             else:
-                for level in range(self.NUMBER_OF_LEVELS):
-                    price_trigger = self.traded_ltp - (0.2 * level * self.traded_atr)
-                    if (ltp < price_trigger):
+                if self.level < self.number_of_levels:
+                    price_trigger = self.traded_ltp - (self.grid_spacing * self.level * self.traded_atr)
+                    if ltp < price_trigger:
                         self.level += 1
-                        size = 2 ** self.level  
-                        self.buy(size=size, sl=self.sl, tp=self.tp)
-                        self.traded_prices.append(ltp)  
-                        break
+                        size = 2 ** (self.level - 1)
+                        new_sl = ltp - (self.stop_loss_factor * self.traded_atr)
+                        self.buy(size=size, sl=new_sl)
+                        self.traded_prices.append(ltp)
         
             if len(self.traded_prices) != 0:
                 average_traded_price = sum(self.traded_prices) / len(self.traded_prices) 
-                if (self.level > (self.NUMBER_OF_LEVELS/2)) and (ltp > average_traded_price):
+                if (self.level > (self.number_of_levels/2)) and (ltp > average_traded_price):
                     self.position.close()
                     self.level = 1
                     self.active = False
@@ -86,25 +87,24 @@ class GridTradingStrategy(Strategy):
                 self.active = True
                 self.traded_ltp = ltp
                 self.traded_atr = atr
-                self.sl = self.traded_ltp + (self.STOP_LOSS_FACTOR * self.traded_atr)
-                self.tp = self.traded_ltp - (self.TAKE_PROFIT_FACTOR * self.traded_atr)
+                self.sl = self.traded_ltp + (self.stop_loss_factor * self.traded_atr)
             
-                self.sell(size=1, sl=self.sl, tp=self.tp)
+                self.sell(size=1, sl=self.sl)
                 self.traded_prices.append(ltp)  
             
             else:
-                for level in range(self.NUMBER_OF_LEVELS):
-                    price_trigger = self.traded_ltp + (0.2 * level * self.traded_atr)
-                    if (ltp > price_trigger):
+                if self.level < self.number_of_levels:
+                    price_trigger = self.traded_ltp + (self.grid_spacing * self.level * self.traded_atr)
+                    if ltp > price_trigger:
                         self.level += 1
-                        size = 2 ** self.level  
-                        self.sell(size=size, sl=self.sl, tp=self.tp)
-                        self.traded_prices.append(ltp)  
-                        break
+                        size = 2 ** (self.level - 1)
+                        new_sl = ltp + (self.stop_loss_factor * self.traded_atr)
+                        self.sell(size=size, sl=new_sl)
+                        self.traded_prices.append(ltp)
         
             if len(self.traded_prices) != 0:
                 average_traded_price = sum(self.traded_prices) / len(self.traded_prices) 
-                if (self.level > (self.NUMBER_OF_LEVELS/2)) and (ltp < average_traded_price):
+                if (self.level > (self.number_of_levels/2)) and (ltp < average_traded_price):
                     self.position.close()
                     self.level = 1
                     self.active = False
@@ -113,10 +113,27 @@ class GridTradingStrategy(Strategy):
         
            
         
-bt = Backtest(GOOG, GridTradingStrategy, cash=10_000, commission=0.002)    
-stats = bt.run()
-bt.plot()
-print(stats)
+if __name__ == '__main__':
+    bt = Backtest(GOOG, GridTradingStrategy, cash=10_000, commission=0.002)    
+    stats = bt.optimize(
+        number_of_levels=[2, 10],
+        grid_spacing=[0.1, 0.5],
+        stop_loss_factor=[2, 5],
+        take_profit_factor=[0.5, 1.5],
+        maximize='Equity Final [$]',
+        return_heatmap=True
+    )
+    bt.plot()
+    print(stats)
+
+    # Extract and save the tradebook from the best run
+    trades = stats[0]._trades
+    if not trades.empty:
+        trades = trades.sort_values(by='EntryTime')
+        trades.to_csv('tradebook.csv', index=False)
+        print("Tradebook of the best strategy saved to tradebook.csv")
+    else:
+        print("No trades were made in the best strategy run.")
             
         
         
