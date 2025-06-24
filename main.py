@@ -2,6 +2,7 @@ from backtesting import Backtest, Strategy
 import talib
 from backtesting.test import GOOG
 import pandas as pd
+from datetime import timedelta
 
 class GridTradingStrategy(Strategy):
     ema_short_period = 9
@@ -110,9 +111,99 @@ class GridTradingStrategy(Strategy):
                     self.active = False
                     self.traded_prices = []  
             
+class WalkForwardOptimization:
+    def __init__(self, data, strategy_class, cash=10_000, commission=0.002):
+        self.data = data
+        self.strategy_class = strategy_class
+        self.cash = cash
+        self.commission = commission
+        self.results = []
         
+    def run(self, training_period=84, test_period=42, step_days=42, optimization_params=None, maximize='Equity Final [$]'):
+        
+        if optimization_params is None:
+            optimization_params = {
+                'number_of_levels': [2, 10],
+                'grid_spacing': [0.1, 0.5],
+                'stop_loss_factor': [2, 5],
+                'take_profit_factor': [0.5, 1.5]
+            }
+            
+        if not isinstance(self.data.index, pd.DateTimeIndex):
+            self.data.index = pd.to_datetime(self.data.index)
+            
+        start_date = self.data.index[0]
+        end_date = self.data.index[-1]
+        
+        current_date = start_date
+        period_count = 0
+        
+        while current_date + timedelta(training_period + test_period) <= end_date:
+            period_count += 1
+            
+            training_start = current_date
+            training_end = training_start + timedelta(training_period)
+            
+            test_start = training_end
+            test_end = test_start + timedelta(test_period)
+            
+            training_data = self.data[training_start:training_end]
+            test_data = self.data[test_start:test_end]
+            
+            # EMA long in strategy is approx 21 days, it should have atleast 3 periods thus >63 or nearly eqyal to >65
+            if (len(training_data)<65) or (len(test_data)<10): 
+                continue
+            
+            try:
+                training_bt = Backtest(training_data, self.strategy_class, cash=self.cash, commission=self.commission)
+                training_stats = training_bt.optimize(
+                    **optimization_params,
+                    maximize=maximize,
+                    method="sambo"
+                )
+                best_parameters = training_stats._strategy
+                
+                test_bt = Backtest(test_data, self.strategy_class, cash=self.cash, commission=self.commission)
+                
+                for param, value in best_parameters.items():
+                    setattr(test_bt._strategy, param, value)
+                    
+                test_stats = test_bt.run()
+                
+                result = {
+                    'period': period_count,
+                    'training_start': training_start,
+                    'training_end': training_end,
+                    'test_start': test_start,
+                    'test_end': test_end,
+                    'best_parameters': best_parameters,
+                    'training_return': training_stats['Return [%]'],
+                    'test_return': test_stats['Return [%]'],
+                    'training_sharpe': training_stats['Sharpe Ratio'],
+                    'test_sharpe': test_stats['Sharpe Ratio'],
+                    'training_max_drawdown': training_stats['Max. Drawdown [%]'],
+                    'test_max_drawdown': test_stats['Max. Drawdown [%]'],
+                    'training_trades': training_stats['# Trades'],
+                    'test_trades': test_stats['# Trades'],
+                    'training_equity_final': training_stats['Equity Final [$]'],
+                    'test_equity_final': test_stats['Equity Final [$]']
+                }
+                
+                self.results.append(result)
+                
+            except Exception as e:
+                print(f"Exception occurred in period {period_count}: e")
+                
+            current_date += timedelta(step_days)
+            
+        return self.results
+            
+        
+        
+            
+    
            
-        
+# Main Function
 if __name__ == '__main__':
     bt = Backtest(GOOG, GridTradingStrategy, cash=10_000, commission=0.002)    
     stats = bt.optimize(
@@ -121,12 +212,13 @@ if __name__ == '__main__':
         stop_loss_factor=[2, 5],
         take_profit_factor=[0.5, 1.5],
         maximize='Equity Final [$]',
-        return_heatmap=True
+        return_heatmap=True,
+        method='grid'
     )
     bt.plot()
     print(stats)
 
-    # Extract and save the tradebook from the best run
+    # To create a Tradebook
     trades = stats[0]._trades
     if not trades.empty:
         trades = trades.sort_values(by='EntryTime')
