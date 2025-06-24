@@ -3,6 +3,9 @@ import talib
 from backtesting.test import GOOG
 import pandas as pd
 from datetime import timedelta
+import matplotlib.pyplot as plt
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning)
 
 class GridTradingStrategy(Strategy):
     ema_short_period = 9
@@ -123,13 +126,13 @@ class WalkForwardOptimization:
         
         if optimization_params is None:
             optimization_params = {
-                'number_of_levels': [2, 10],
-                'grid_spacing': [0.1, 0.5],
-                'stop_loss_factor': [2, 5],
-                'take_profit_factor': [0.5, 1.5]
+                'number_of_levels': [2, 5, 8],      
+                'grid_spacing': [0.1, 0.3, 0.5],    
+                'stop_loss_factor': [2, 3.5, 5],    
+                'take_profit_factor': [0.5, 1.0, 1.5]  
             }
             
-        if not isinstance(self.data.index, pd.DateTimeIndex):
+        if not isinstance(self.data.index, pd.DatetimeIndex):
             self.data.index = pd.to_datetime(self.data.index)
             
         start_date = self.data.index[0]
@@ -151,17 +154,18 @@ class WalkForwardOptimization:
             test_data = self.data[test_start:test_end]
             
             # EMA long in strategy is approx 21 days, it should have atleast 3 periods thus >63 or nearly eqyal to >65
-            if (len(training_data)<65) or (len(test_data)<10): 
-                continue
+            # if (len(training_data)<65) or (len(test_data)<10): 
+            #     current_date += timedelta(step_days)
+            #     continue
             
             try:
                 training_bt = Backtest(training_data, self.strategy_class, cash=self.cash, commission=self.commission)
                 training_stats = training_bt.optimize(
                     **optimization_params,
                     maximize=maximize,
-                    method="sambo"
+                    method="grid"
                 )
-                best_parameters = training_stats._strategy
+                best_parameters = training_stats._strategy.__dict__
                 
                 test_bt = Backtest(test_data, self.strategy_class, cash=self.cash, commission=self.commission)
                 
@@ -192,12 +196,131 @@ class WalkForwardOptimization:
                 self.results.append(result)
                 
             except Exception as e:
-                print(f"Exception occurred in period {period_count}: e")
+                print(f"Exception occurred in period {period_count}: {e}")
                 
+            
             current_date += timedelta(step_days)
             
         return self.results
-            
+    
+    def get_summary(self):
+        if not self.results:
+            return None
+        
+        df = pd.DataFrame(self.results)
+        
+        summary = {
+            'total_periods': len(df),
+            'avg_training_return': df['training_return'].mean(),
+            'avg_test_return': df['test_return'].mean(),
+            'avg_training_sharpe': df['training_sharpe'].mean(),
+            'avg_test_sharpe': df['test_sharpe'].mean(),
+            'avg_training_drawdown': df['training_max_drawdown'].mean(),
+            'avg_test_drawdown': df['test_max_drawdown'].mean(),
+            'positive_test_periods': (df['test_return'] > 0).sum(),
+            'positive_test_rate': (df['test_return'] > 0).mean() * 100,
+            'best_test_return': df['test_return'].max(),
+            'worst_test_return': df['test_return'].min(),
+            'test_return_std': df['test_return'].std(),
+            'cumulative_test_return': (1 + df['test_return'] / 100).prod() - 1
+        }
+        
+        return summary
+    
+    def plot_results(self):
+        if not self.results:
+            print("No results to plot")
+            return
+        
+        df = pd.DataFrame(self.results)
+        
+        fig, axes = plt.subplots(2, 2, figsize=(15, 10))
+        
+        # Plot 1: Train vs Test Returns
+        axes[0, 0].plot(df['period'], df['training_return'], 'b-', label='Training Return', alpha=0.7)
+        axes[0, 0].plot(df['period'], df['test_return'], 'r-', label='Test Return', alpha=0.7)
+        axes[0, 0].set_title('Training vs Test Returns')
+        axes[0, 0].set_xlabel('Period')
+        axes[0, 0].set_ylabel('Return (%)')
+        axes[0, 0].legend()
+        axes[0, 0].grid(True, alpha=0.3)
+        
+        # Plot 2: Cumulative Returns
+        cumulative_training = (1 + df['training_return'] / 100).cumprod() - 1
+        cumulative_test = (1 + df['test_return'] / 100).cumprod() - 1
+        axes[0, 1].plot(df['period'], cumulative_training * 100, 'b-', label='Cumulative Training', alpha=0.7)
+        axes[0, 1].plot(df['period'], cumulative_test * 100, 'r-', label='Cumulative Test', alpha=0.7)
+        axes[0, 1].set_title('Cumulative Returns')
+        axes[0, 1].set_xlabel('Period')
+        axes[0, 1].set_ylabel('Cumulative Return (%)')
+        axes[0, 1].legend()
+        axes[0, 1].grid(True, alpha=0.3)
+        
+        # Plot 3: Sharpe Ratios
+        axes[1, 0].plot(df['period'], df['training_sharpe'], 'b-', label='Training Sharpe', alpha=0.7)
+        axes[1, 0].plot(df['period'], df['test_sharpe'], 'r-', label='Test Sharpe', alpha=0.7)
+        axes[1, 0].set_title('Sharpe Ratios')
+        axes[1, 0].set_xlabel('Period')
+        axes[1, 0].set_ylabel('Sharpe Ratio')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
+        
+        # Plot 4: Max Drawdowns
+        axes[1, 1].plot(df['period'], df['training_max_drawdown'], 'b-', label='Training Max DD', alpha=0.7)
+        axes[1, 1].plot(df['period'], df['test_max_drawdown'], 'r-', label='Test Max DD', alpha=0.7)
+        axes[1, 1].set_title('Maximum Drawdowns')
+        axes[1, 1].set_xlabel('Period')
+        axes[1, 1].set_ylabel('Max Drawdown (%)')
+        axes[1, 1].legend()
+        axes[1, 1].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        plt.show()
+        
+        return fig
+        
+    def plot_walkforward_schedule(self):
+        """
+        Plots a Gantt-style chart showing training and test periods for each walk-forward window.
+        Training periods are blue, test periods are orange.
+        """
+        if not self.results:
+            print("No results to plot schedule.")
+            return
+        import matplotlib.dates as mdates
+        import numpy as np
+        df = pd.DataFrame(self.results)
+        fig, ax = plt.subplots(figsize=(12, 4))
+        for i, row in df.iterrows():
+            # Training period
+            ax.barh(
+                y=row['period'],
+                width=row['training_end'] - row['training_start'],
+                left=row['training_start'],
+                height=0.8,
+                color='blue',
+                edgecolor='black',
+                label='Training' if i == 0 else ""
+            )
+            # Test period
+            ax.barh(
+                y=row['period'],
+                width=row['test_end'] - row['test_start'],
+                left=row['test_start'],
+                height=0.8,
+                color='orange',
+                edgecolor='black',
+                label='Test' if i == 0 else ""
+            )
+        ax.set_xlabel('Date')
+        ax.set_ylabel('Walk-Forward Window')
+        ax.invert_yaxis()
+        ax.xaxis_date()
+        ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
+        ax.legend(loc='upper right')
+        plt.tight_layout()
+        plt.show()
+        return fig
         
         
             
@@ -205,27 +328,58 @@ class WalkForwardOptimization:
            
 # Main Function
 if __name__ == '__main__':
-    bt = Backtest(GOOG, GridTradingStrategy, cash=10_000, commission=0.002)    
-    stats = bt.optimize(
-        number_of_levels=[2, 10],
-        grid_spacing=[0.1, 0.5],
-        stop_loss_factor=[2, 5],
-        take_profit_factor=[0.5, 1.5],
-        maximize='Equity Final [$]',
-        return_heatmap=True,
-        method='grid'
-    )
-    bt.plot()
-    print(stats)
+    # Normal Backtesting Code
+    # bt = Backtest(GOOG, GridTradingStrategy, cash=10_000, commission=0.002)    
+    # stats = bt.optimize(
+    #     number_of_levels=[2, 10],
+    #     grid_spacing=[0.1, 0.5],
+    #     stop_loss_factor=[2, 5],
+    #     take_profit_factor=[0.5, 1.5],
+    #     maximize='Equity Final [$]',
+    #     return_heatmap=True,
+    #     method='grid'
+    # )
+    # bt.plot()
+    # print(stats)
 
-    # To create a Tradebook
-    trades = stats[0]._trades
-    if not trades.empty:
-        trades = trades.sort_values(by='EntryTime')
-        trades.to_csv('tradebook.csv', index=False)
-        print("Tradebook of the best strategy saved to tradebook.csv")
-    else:
-        print("No trades were made in the best strategy run.")
+    # # To create a Tradebook
+    # trades = stats[0]._trades
+    # if not trades.empty:
+    #     trades = trades.sort_values(by='EntryTime')
+    #     trades.to_csv('tradebook.csv', index=False)
+    #     print("Tradebook of the best strategy saved to tradebook.csv")
+    # else:
+    #     print("No trades were made in the best strategy run.")
+        
+        
+        
+        
+    # Walk Forward Optimization Code
+    wfo_instance = WalkForwardOptimization(GOOG, GridTradingStrategy, cash=10_000, commission=0.002)
+    
+    optimization_params = {
+        'number_of_levels': [2],
+        'grid_spacing': [0.1],
+        'stop_loss_factor': [2],
+        'take_profit_factor': [0.5]
+    }
+    
+    results = wfo_instance.run(training_period=84, test_period=42, step_days=42, optimization_params=None, maximize='Equity Final [$]')
+    
+    summary = wfo_instance.get_summary()
+    
+    wfo_instance.plot_results()
+    
+    # Plot walk-forward schedule (Gantt-style)
+    wfo_instance.plot_walkforward_schedule()
+    
+    # Save detailed results to CSV
+    if results:
+        results_df = pd.DataFrame(results)
+        results_df.to_csv('walk_forward_results.csv', index=False)
+        print("\nDetailed walk-forward results saved to 'walk_forward_results.csv'")
+    
+    
             
         
         
